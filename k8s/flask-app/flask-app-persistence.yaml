@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: flask-app }
+  template:
+    metadata:
+      labels: { app: flask-app }
+    spec:
+      containers:
+        - name: flask
+          image: lenchaber/flask-app:1.0           # tu imagen
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+          env:
+            - name: TEMPLATES_AUTO_RELOAD  # ayuda a ver cambios sin reiniciar
+              value: "true"
+            - name: FLASK_ENV
+              value: "development"
+          volumeMounts:
+            - name: templates-vol
+              mountPath: /usr/src/app/templates
+      volumes:
+        - name: templates-vol
+          persistentVolumeClaim:
+            claimName: templates-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-app-svc
+spec:
+  type: NodePort
+  selector: { app: flask-app }
+  ports:
+    - port: 5000
+      targetPort: 5000

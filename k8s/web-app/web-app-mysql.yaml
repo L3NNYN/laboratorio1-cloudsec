@@ -1,0 +1,179 @@
+# =========================
+#  Persistent Volumes (PVCs)
+# =========================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi   # ajusta según necesites
+  # En Minikube el StorageClass "standard" hará provisión dinámica automáticamente
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: web-pvc
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 100Mi
+
+# =========================
+#  MySQL (Deployment + SVC)
+# =========================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysqldb
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mysqldb }
+  template:
+    metadata:
+      labels: { app: mysqldb }
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: mysql
+          image: mysql:5.7
+          args: ["--skip-grant-tables"]
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: db-secrets, key: db_root_password } }
+            - name: MYSQL_USER
+              valueFrom: { secretKeyRef: { name: db-secrets, key: db_user } }
+            - name: MYSQL_PASSWORD
+              valueFrom: { secretKeyRef: { name: db-secrets, key: db_password } }
+            - name: MYSQL_DATABASE
+              valueFrom: { secretKeyRef: { name: db-secrets, key: db_name } }
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            tcpSocket: { port: 3306 }
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 3306 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysqldb
+spec:
+  selector: { app: mysqldb }
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+  type: ClusterIP
+
+# =========================
+#  Nginx (Deployment + SVC)
+# =========================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-conf
+data:
+  default.conf: |
+    server {
+      listen 80;
+      server_name  _;
+
+      root /usr/share/nginx/html;
+      index index.html;
+
+      location / {
+        try_files $uri $uri/ =404;
+      }
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: webserver }
+  template:
+    metadata:
+      labels: { app: webserver }
+    spec:
+      initContainers:
+        - name: seed-html
+          image: busybox:1.36
+          command: ['sh','-c']
+          # Si el volumen está vacío, crea un index.html por defecto
+          args:
+            - >
+              if [ ! -f /usr/share/nginx/html/index.html ]; then
+                echo '<h1>Hola desde Nginx en Kubernetes</h1>' > /usr/share/nginx/html/index.html;
+              fi
+          volumeMounts:
+            - name: web-content
+              mountPath: /usr/share/nginx/html
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: web-content
+              mountPath: /usr/share/nginx/html
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: web-content
+          persistentVolumeClaim:
+            claimName: web-pvc
+        - name: nginx-config
+          configMap:
+            name: nginx-conf
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webserver
+spec:
+  selector: { app: webserver }
+  type: NodePort        # fácil de abrir en Minikube
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

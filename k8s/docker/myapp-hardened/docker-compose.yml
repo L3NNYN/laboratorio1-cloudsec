@@ -1,0 +1,38 @@
+version: "3.9"
+services:
+  web:
+    image: nginxinc/nginx-unprivileged:1.27.0@sha256:3066f7a153bfab83a6092b12ca83ec9633c1c7f10c5d8e100bdf335fcbae1dee
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    ports: ["8080:8080"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev"]
+    user: "101:101"
+    ulimits:
+      nproc: 4096
+      nofile: 65536
+    depends_on: [db]
+
+  db:
+    image: mysql:5.7
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_root_password
+      - db_password
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    volumes:
+      - db_data:/var/lib/mysql
+
+secrets:
+  db_password:  { file: ./db_password.txt }
+  db_root_password: { file: ./db_root_password.txt }
+volumes:
+  db_data: {}
